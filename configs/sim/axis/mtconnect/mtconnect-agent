@@ -49,6 +49,8 @@ def read_options(ini):
         "mqtt_broker": ini.find("MTCONNECT", "MQTT_BROKER", "localhost"),
         "mqtt_port": ini.find_int("MTCONNECT", "MQTT_PORT", 1883),
         "mqtt_prefix": ini.find("MTCONNECT", "MQTT_PREFIX", "MTConnect"),
+        "mqtt_username": ini.find("MTCONNECT", "MQTT_USERNAME"),
+        "mqtt_password": ini.find("MTCONNECT", "MQTT_PASSWORD"),
     }
 
 
@@ -116,7 +118,9 @@ def main():
     if opts["transport"] in ("mqtt", "both"):
         from mtc.mqtt_agent import MqttAgent
         mqtt_agent = MqttAgent(state, broker=opts["mqtt_broker"],
-                               port=opts["mqtt_port"], prefix=opts["mqtt_prefix"])
+                               port=opts["mqtt_port"], prefix=opts["mqtt_prefix"],
+                               username=opts["mqtt_username"],
+                               password=opts["mqtt_password"])
         print("info: MTConnect MQTT publishing to %s/*/%s"
               % (opts["mqtt_prefix"], state.config.uuid))
 
@@ -134,6 +138,7 @@ def main():
             if mqtt_agent is not None:
                 mqtt_agent.publish_current()
                 mqtt_agent.publish_sample()
+                mqtt_agent.publish_assets()
             beat = (beat + 1) & 0xFFFFFFFF
             if comp is not None:
                 comp["heartbeat"] = beat

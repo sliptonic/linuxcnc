@@ -9,10 +9,15 @@
 # Reuses paho-mqtt, already used by src/hal/user_comps/mqtt-publisher.py.
 # Works with both paho-mqtt 1.x and 2.x.
 
+import json
+
+from . import ha as ha_mod
+
 
 class MqttAgent:
     def __init__(self, agent, broker="localhost", port=1883, prefix="MTConnect",
-                 username=None, password=None, client_id="linuxcnc-mtconnect"):
+                 username=None, password=None, client_id="linuxcnc-mtconnect",
+                 ha_discovery=False, ha_prefix="homeassistant"):
         try:
             import paho.mqtt.client as mqtt
         except ModuleNotFoundError:
@@ -26,6 +31,13 @@ class MqttAgent:
         self._last_sample_seq = 1
         self._last_asset_sig = None
 
+        self.ha = ha_discovery
+        self.ha_prefix = ha_prefix.rstrip("/")
+        self._ha_state_topic = "%s/ha/%s/state" % (self.prefix, self.uuid)
+        self._ha_avail_topic = "%s/ha/%s/availability" % (self.prefix, self.uuid)
+        self._ha_sensors = (ha_mod.build_sensors(agent.model, agent.config)
+                            if self.ha else [])
+
         # paho 2.x requires an explicit callback API version; 1.x has no such arg.
         try:
             self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,
@@ -34,6 +46,8 @@ class MqttAgent:
             self.client = mqtt.Client(client_id=client_id)
         if username:
             self.client.username_pw_set(username, password)
+        if self.ha:  # Last Will so HA marks the device unavailable if we vanish
+            self.client.will_set(self._ha_avail_topic, "offline", retain=True)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.connect_async(broker, port, keepalive=60)
@@ -51,8 +65,18 @@ class MqttAgent:
                   % self._topic("Probe"))
             self.publish_probe()
             self.publish_assets()
+            if self.ha:
+                self._publish_ha_discovery()
+                self.client.publish(self._ha_avail_topic, "online", retain=True)
+                self.publish_ha()
+                print("info: HA MQTT discovery published under %s/sensor/%s/*"
+                      % (self.ha_prefix, ha_mod.node_id(self.agent.config)))
         else:
-            print("error: MQTT connect failed (rc=%s) — check host/credentials" % rc)
+            hint = {1: "unacceptable protocol version", 2: "identifier rejected",
+                    3: "broker unavailable", 4: "bad username or password",
+                    5: "not authorized (anonymous refused / bad credentials)"}
+            print("error: MQTT connect failed (rc=%s: %s)"
+                  % (rc, hint.get(int(rc) if str(rc).isdigit() else -1, "see broker log")))
 
     def _on_disconnect(self, client, userdata, rc, *args):
         print("warning: MQTT disconnected (rc=%s)" % rc)
@@ -84,6 +108,23 @@ class MqttAgent:
             self.client.publish(self._topic("Asset", asset.asset_id), doc,
                                 retain=True)
 
+    def _publish_ha_discovery(self):
+        node = ha_mod.node_id(self.agent.config)
+        for s in self._ha_sensors:
+            topic = "%s/sensor/%s/%s/config" % (self.ha_prefix, node, s["key"])
+            payload = ha_mod.discovery_payload(s, self.agent.config,
+                                               self._ha_state_topic, self._ha_avail_topic)
+            self.client.publish(topic, json.dumps(payload), retain=True)
+
+    def publish_ha(self):
+        if not self.ha:
+            return
+        self.client.publish(self._ha_state_topic,
+                            ha_mod.state_json(self.agent.latest_values(), self._ha_sensors),
+                            retain=True)
+
     def stop(self):
+        if self.ha:
+            self.client.publish(self._ha_avail_topic, "offline", retain=True)
         self.client.loop_stop()
         self.client.disconnect()

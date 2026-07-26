@@ -318,6 +318,32 @@ def test_auto_geometry():
         http.stop()
 
 
+def test_ha_discovery():
+    import json
+    from mtc import ha
+
+    _, model, config = load(CONFIGS["3axis"])
+    sensors = ha.build_sensors(model, config)
+    keys = {s["key"] for s in sensors}
+    assert {"execution", "spdl_speed", "pos_x", "pos_y", "pos_z"} <= keys, keys
+
+    px = [s for s in sensors if s["key"] == "pos_x"][0]
+    d = ha.discovery_payload(px, config, "st/topic", "av/topic")
+    assert d["state_topic"] == "st/topic"
+    assert d["value_template"] == "{{ value_json.pos_x }}"
+    assert d["unit_of_measurement"] == "in"          # inch machine
+    assert d["device"]["identifiers"] == [config.uuid]
+    assert d["unique_id"] == "%s_pos_x" % config.uuid
+
+    state = json.loads(ha.state_json(
+        {"execution": "ACTIVE", "pos_x": 1.5, "pos_z": "UNAVAILABLE",
+         "workoffset": {"G54": {}}}, sensors))
+    assert state["execution"] == "ACTIVE" and state["pos_x"] == 1.5
+    assert "pos_z" not in state          # UNAVAILABLE skipped
+    assert "workoffset" not in state     # structured value skipped
+    print("ok  HA discovery (sensors + discovery payload + state JSON)")
+
+
 def test_entry_dump_probe():
     out = subprocess.check_output(
         [sys.executable, "./mtconnect-agent", "--dump-probe", CONFIGS["5axis"]],
@@ -337,6 +363,7 @@ def main():
     test_http_endpoints()
     test_solid_models()
     test_auto_geometry()
+    test_ha_discovery()
     test_entry_dump_probe()
     print("\nALL TESTS PASSED")
     return 0

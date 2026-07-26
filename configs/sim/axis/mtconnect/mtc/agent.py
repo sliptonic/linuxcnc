@@ -34,6 +34,7 @@ class AgentState:
         self.models = build_models(self.ini, self.model, self.config)
         self._assets = []
         self._last_in_spindle = None
+        self._last_values = {}
         self._lock = threading.Lock()
 
     # -- data collection -----------------------------------------------------
@@ -48,6 +49,12 @@ class AgentState:
             self._detect_asset_change(assets, values)
             self.buffer.ingest(values, ts)
             self._assets = assets
+            self._last_values = values
+
+    def latest_values(self):
+        """Flat {dataitem_id: value} snapshot from the last poll (for HA)."""
+        with self._lock:
+            return dict(self._last_values)
 
     def _detect_asset_change(self, assets, values):
         in_spindle = values.get("toolnum")

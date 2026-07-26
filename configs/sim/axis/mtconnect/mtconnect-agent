@@ -49,8 +49,12 @@ def read_options(ini):
         "mqtt_broker": ini.find("MTCONNECT", "MQTT_BROKER", "localhost"),
         "mqtt_port": ini.find_int("MTCONNECT", "MQTT_PORT", 1883),
         "mqtt_prefix": ini.find("MTCONNECT", "MQTT_PREFIX", "MTConnect"),
-        "mqtt_username": ini.find("MTCONNECT", "MQTT_USERNAME"),
-        "mqtt_password": ini.find("MTCONNECT", "MQTT_PASSWORD"),
+        "mqtt_username": (ini.find("MTCONNECT", "MQTT_USERNAME")
+                          or ini.find("MTCONNECT", "MQTT_USER")),
+        "mqtt_password": (ini.find("MTCONNECT", "MQTT_PASSWORD")
+                          or ini.find("MTCONNECT", "MQTT_PASS")),
+        "ha_discovery": truthy(ini.find("MTCONNECT", "HA_DISCOVERY", "0")),
+        "ha_prefix": ini.find("MTCONNECT", "HA_PREFIX", "homeassistant"),
     }
 
 
@@ -120,7 +124,9 @@ def main():
         mqtt_agent = MqttAgent(state, broker=opts["mqtt_broker"],
                                port=opts["mqtt_port"], prefix=opts["mqtt_prefix"],
                                username=opts["mqtt_username"],
-                               password=opts["mqtt_password"])
+                               password=opts["mqtt_password"],
+                               ha_discovery=opts["ha_discovery"],
+                               ha_prefix=opts["ha_prefix"])
         print("info: MTConnect MQTT publishing to %s/*/%s"
               % (opts["mqtt_prefix"], state.config.uuid))
 
@@ -139,6 +145,7 @@ def main():
                 mqtt_agent.publish_current()
                 mqtt_agent.publish_sample()
                 mqtt_agent.publish_assets()
+                mqtt_agent.publish_ha()
             beat = (beat + 1) & 0xFFFFFFFF
             if comp is not None:
                 comp["heartbeat"] = beat

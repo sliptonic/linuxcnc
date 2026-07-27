@@ -148,16 +148,21 @@ def test_tool_offset_and_rotation():
 def test_assets():
     _, _, config = load(CONFIGS["3axis"])
     tools = [
-        ToolAsset(tool_no=1, pocket=1, in_spindle=True, diameter=6.35, length_z=50.0),
+        ToolAsset(tool_no=1, pocket=1, in_spindle=True, diameter=6.35, length_z=50.0,
+                  comment="1/4 flat endmill"),
         ToolAsset(tool_no=2, pocket=5, in_spindle=False, diameter=3.0),
     ]
     root = ET.fromstring(assets_xml(tools, config, TS))
-    cts = root.findall(".//{urn:mtconnect.org:MTConnectAssets:1.7}CuttingTool")
+    ns = "{urn:mtconnect.org:MTConnectAssets:1.7}"
+    cts = root.findall(".//%sCuttingTool" % ns)
     assert len(cts) == 2, len(cts)
     assert cts[0].get("assetId") == "tool-1"
-    loc = cts[0].find(".//{urn:mtconnect.org:MTConnectAssets:1.7}Location")
+    loc = cts[0].find(".//%sLocation" % ns)
     assert loc.get("type") == "SPINDLE" and loc.text == "1", loc.attrib
-    print("ok  assets (CuttingTool location + measurements)")
+    desc = cts[0].find("%sDescription" % ns)
+    assert desc is not None and desc.text == "1/4 flat endmill", ET.tostring(cts[0])
+    assert cts[1].find("%sDescription" % ns) is None  # empty comment -> no element
+    print("ok  assets (CuttingTool location + measurements + comment)")
 
 
 def test_source_offline():

@@ -194,6 +194,8 @@ def _cutting_tool(parent, tool, config, timestamp):
         "deviceUuid": config.uuid,
         "timestamp": timestamp,
     })
+    if tool.comment:
+        ET.SubElement(ct, _as("Description")).text = tool.comment
     lifecycle = ET.SubElement(ct, _as("CuttingToolLifeCycle"))
     status = ET.SubElement(lifecycle, _as("CutterStatus"))
     ET.SubElement(status, _as("Status")).text = "USED" if tool.in_spindle else "AVAILABLE"

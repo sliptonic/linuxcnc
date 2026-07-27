@@ -146,8 +146,24 @@ class LcncSource:
                 length_z=getattr(entry, "zoffset", 0.0),
                 length_x=getattr(entry, "xoffset", 0.0),
                 orientation=getattr(entry, "orientation", 0),
+                comment=self._tool_comment(tool_no),
             ))
         return assets
+
+    def _tool_comment(self, tool_no):
+        """Fetch a tool's comment string.
+
+        stat.tool_table entries don't carry the comment (the struct-sequence
+        binding omits it); stat.toolinfo(toolno) returns a dict that does.
+        toolinfo rejects toolno==0 and may raise before tooldata is ready.
+        """
+        info = getattr(self.stat, "toolinfo", None)
+        if info is None or tool_no <= 0:
+            return ""
+        try:
+            return (info(tool_no) or {}).get("comment", "") or ""
+        except Exception:
+            return ""
 
 
 _MODE_NAMES = {

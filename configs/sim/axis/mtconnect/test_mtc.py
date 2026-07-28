@@ -149,7 +149,7 @@ def test_assets():
     _, _, config = load(CONFIGS["3axis"])
     tools = [
         ToolAsset(tool_no=1, pocket=1, in_spindle=True, diameter=6.35, length_z=50.0,
-                  comment="1/4 flat endmill"),
+                  comment="1/4 flat endmill  "),  # trailing space should be trimmed
         ToolAsset(tool_no=2, pocket=5, in_spindle=False, diameter=3.0),
     ]
     root = ET.fromstring(assets_xml(tools, config, TS))
@@ -157,12 +157,66 @@ def test_assets():
     cts = root.findall(".//%sCuttingTool" % ns)
     assert len(cts) == 2, len(cts)
     assert cts[0].get("assetId") == "tool-1"
+    assert cts[0].get("serialNumber") == "tool-1", cts[0].attrib  # required attr
     loc = cts[0].find(".//%sLocation" % ns)
     assert loc.get("type") == "SPINDLE" and loc.text == "1", loc.attrib
     desc = cts[0].find("%sDescription" % ns)
-    assert desc is not None and desc.text == "1/4 flat endmill", ET.tostring(cts[0])
+    assert desc is not None and desc.text == "1/4 flat endmill", repr(desc.text)
     assert cts[1].find("%sDescription" % ns) is None  # empty comment -> no element
-    print("ok  assets (CuttingTool location + measurements + comment)")
+    # length offset is FunctionalLength (LF), not BodyLengthMax
+    lf = cts[0].find(".//%sFunctionalLength" % ns)
+    assert lf is not None and lf.get("code") == "LF" and lf.text == "50", ET.tostring(cts[0])
+    assert cts[0].find(".//%sBodyLengthMax" % ns) is None
+    # diameter is a CuttingItem measurement, not a tool-level one
+    dia = cts[0].find(".//%sCuttingItems/%sCuttingItem/%sMeasurements/%sCuttingDiameter"
+                      % (ns, ns, ns, ns))
+    assert dia is not None and dia.text == "6.35" and dia.get("code") == "DC", ET.tostring(cts[0])
+    print("ok  assets (serialNumber + FunctionalLength + CuttingItem diameter + comment)")
+
+
+def test_probe_standard_blocks():
+    # spindle Specifications, Coolant system, and the kinematics extension living
+    # inside the (schema-valid) Description host.
+    _, model, config = load("example.ini")
+    root = ET.fromstring(probe_xml(model, config, creation_time=TS))
+    ns = "{%s}" % MTC_NS
+    spec = root.find(".//%sRotary[@id='spindle']//%sSpecification" % (ns, ns))
+    assert spec is not None and spec.get("type") == "ROTARY_VELOCITY", "no spindle spec"
+    assert spec.find("%sMaximum" % ns).text == "6000"
+    cool = root.find(".//%sCoolant" % ns)
+    assert cool is not None, "no Coolant component"
+    assert cool.find(".//%sDataItem[@id='coolant_flood']" % ns).get("type") == "x:FLOOD"
+    # x:Kinematics is nested in a Description (the lax xs:any extension point)
+    kin_ext = root.find(".//%sDescription/{%s}Kinematics" % (ns, EXT_NS))
+    assert kin_ext is not None, "x:Kinematics not under Description"
+    assert kin_ext.get("nativeLinearUnits") == "INCH"
+    # Agent device is present (schema-required alongside the machine Device)
+    assert root.find(".//%sAgent" % ns) is not None, "no Agent device"
+    print("ok  probe standard blocks (spindle Spec, Coolant, kinematics host, Agent)")
+
+
+def test_spindle_constraints():
+    ns = "{%s}" % MTC_NS
+
+    def spdl_cmd(path):
+        _, model, config = load(path)
+        root = ET.fromstring(probe_xml(model, config, creation_time=TS))
+        for di in root.iter("%sDataItem" % ns):
+            if di.get("id") == "spdl_speed_cmd":
+                return di
+        raise AssertionError("spdl_speed_cmd missing")
+
+    # example.ini declares [SPINDLE_0] MIN/MAX_FORWARD_VELOCITY -> Constraints
+    di = spdl_cmd("example.ini")
+    con = di.find("%sConstraints" % ns)
+    assert con is not None, "no Constraints on spdl_speed_cmd"
+    assert con.find("%sMinimum" % ns).text == "100", ET.tostring(di)
+    assert con.find("%sMaximum" % ns).text == "6000", ET.tostring(di)
+
+    # a config without spindle velocity limits emits no Constraints (no bogus
+    # ~2.1e9 default range fabricated).
+    assert spdl_cmd(CONFIGS["3axis"]).find("%sConstraints" % ns) is None
+    print("ok  spindle speed range Constraints (from [SPINDLE_0], omitted when absent)")
 
 
 def test_source_offline():
@@ -303,8 +357,14 @@ def test_auto_geometry():
     mm = build_models(ini, model, config)
     assert mm.enabled() and mm.base is not None
     assert set(mm.axis) == {"X", "Y", "Z"}, set(mm.axis)
-    assert mm.units == "INCH", mm.units  # auto meshes use machine units
+    # Geometry is served in the MTConnect canonical unit (millimetre); the inch
+    # travel limits are scaled up by 25.4 in the generated boxes.
+    assert mm.units == "MILLIMETER", mm.units
     assert all(v.startswith("solid") for v in mm.generated.values())
+    # X box half-width tracks the 20" span * 25.4 -> ~500 mm scale, not ~20.
+    xs = [float(tok) for line in mm.generated["axis_x.stl"].splitlines()
+          if line.strip().startswith("vertex") for tok in [line.split()[1]]]
+    assert max(xs) > 100, max(xs)  # would be < 20 if still in inches
 
     probe = ET.fromstring(probe_xml(model, config, models=mm))
     hrefs = {sm.get("href") for sm in probe.findall(".//{%s}SolidModel" % MTC_NS)}
@@ -336,7 +396,7 @@ def test_ha_discovery():
     d = ha.discovery_payload(px, config, "st/topic", "av/topic")
     assert d["state_topic"] == "st/topic"
     assert d["value_template"] == "{{ value_json.pos_x }}"
-    assert d["unit_of_measurement"] == "in"          # inch machine
+    assert d["unit_of_measurement"] == "mm"          # canonical (values are mm)
     assert d["device"]["identifiers"] == [config.uuid]
     assert d["unique_id"] == "%s_pos_x" % config.uuid
 
@@ -364,6 +424,8 @@ def main():
     test_work_offset_table()
     test_tool_offset_and_rotation()
     test_assets()
+    test_probe_standard_blocks()
+    test_spindle_constraints()
     test_source_offline()
     test_http_endpoints()
     test_solid_models()

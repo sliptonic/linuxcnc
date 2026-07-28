@@ -27,6 +27,8 @@ class DataItemDef:
     name: str = None
     representation: str = None   # e.g. "TABLE" for WORK_OFFSET
     ext: bool = False            # extension type: emit as "x:<TYPE>" / <x:Element>
+    constraints: dict = None     # {"minimum": float, "maximum": float} on the probe
+    native_units: str = None     # nativeUnits when the machine unit != canonical
 
     @property
     def element(self):
@@ -48,7 +50,9 @@ def build_dataitems(model, config):
         DataItemDef("program", "EVENT", "PROGRAM", "path", "Path", "path"),
         DataItemDef("line", "EVENT", "LINE_NUMBER", "path", "Path", "path", subType="ACTUAL"),
         DataItemDef("pathfeed", "SAMPLE", "PATH_FEEDRATE", "path", "Path", "path",
-                    units="MILLIMETER/SECOND"),
+                    units="MILLIMETER/SECOND",
+                    native_units=("INCH/SECOND"
+                                  if config.native_linear_units == "INCH" else None)),
         DataItemDef("feedovr", "SAMPLE", "PATH_FEEDRATE", "path", "Path", "path",
                     subType="OVERRIDE", units="PERCENT"),
         DataItemDef("toolnum", "EVENT", "TOOL_NUMBER", "path", "Path", "path"),
@@ -66,25 +70,51 @@ def build_dataitems(model, config):
                     "path", units="DEGREE", ext=True),
     ]
 
+    lin_native = (config.native_linear_units
+                  if config.native_linear_units != config.linear_units else None)
     for axis in model.axes:
         aid = axis.letter.lower()
         cid = "axis_%s" % aid
         if axis.kind == "LINEAR":
-            comp_type, dtype, units = "Linear", "POSITION", config.linear_units
+            comp_type, dtype, units, native = "Linear", "POSITION", config.linear_units, lin_native
         else:
-            comp_type, dtype, units = "Rotary", "ANGLE", config.angular_units
+            comp_type, dtype, units, native = "Rotary", "ANGLE", config.angular_units, None
         items.append(DataItemDef("pos_%s" % aid, "SAMPLE", dtype, cid, comp_type,
-                                 axis.letter, subType="ACTUAL", units=units))
+                                 axis.letter, subType="ACTUAL", units=units,
+                                 native_units=native))
         items.append(DataItemDef("poscmd_%s" % aid, "SAMPLE", dtype, cid, comp_type,
-                                 axis.letter, subType="COMMANDED", units=units))
+                                 axis.letter, subType="COMMANDED", units=units,
+                                 native_units=native))
+
+    # Advertise the spindle's usable speed band ([SPINDLE_0] forward velocity
+    # limits, in RPM) as MTConnect Constraints on the commanded velocity, but
+    # only when the INI actually sets them (LinuxCNC's default max is ~2.1e9).
+    spdl_constraints = None
+    lo, hi = config.spindle_speed_min, config.spindle_speed_max
+    if lo is not None or hi is not None:
+        spdl_constraints = {}
+        if lo is not None:
+            spdl_constraints["minimum"] = lo
+        if hi is not None:
+            spdl_constraints["maximum"] = hi
 
     items += [
         DataItemDef("spdl_speed", "SAMPLE", "ROTARY_VELOCITY", "spindle", "Rotary", "S",
                     subType="ACTUAL", units="REVOLUTION/MINUTE"),
         DataItemDef("spdl_speed_cmd", "SAMPLE", "ROTARY_VELOCITY", "spindle", "Rotary", "S",
-                    subType="COMMANDED", units="REVOLUTION/MINUTE"),
+                    subType="COMMANDED", units="REVOLUTION/MINUTE",
+                    constraints=spdl_constraints),
         DataItemDef("spdl_mode", "EVENT", "ROTARY_MODE", "spindle", "Rotary", "S"),
         DataItemDef("spdl_dir", "EVENT", "DIRECTION", "spindle", "Rotary", "S", subType="ROTARY"),
+    ]
+
+    # Coolant system (iocontrol flood/mist).  LinuxCNC exposes plain on/off with
+    # no standard MTConnect enum, so these are extension events (x:FLOOD/x:MIST).
+    items += [
+        DataItemDef("coolant_flood", "EVENT", "FLOOD", "coolant", "Coolant",
+                    "coolant", ext=True),
+        DataItemDef("coolant_mist", "EVENT", "MIST", "coolant", "Coolant",
+                    "coolant", ext=True),
     ]
     return items
 

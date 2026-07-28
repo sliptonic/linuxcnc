@@ -36,7 +36,7 @@ class IniReader:
 
     def has_section(self, section):
         if self._lcnc is not None:
-            return bool(self._lcnc.has_section(section))
+            return bool(self._lcnc.hassection(section))
         return section in self._data
 
     # -- typed helpers -------------------------------------------------------

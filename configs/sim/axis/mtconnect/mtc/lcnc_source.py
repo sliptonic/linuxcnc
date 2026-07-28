@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass, field
 
 from .observations import axis_index
+from .kinematics import LINEAR_LETTERS
 
 UNAVAILABLE = "UNAVAILABLE"
 
@@ -42,6 +43,8 @@ class LcncSource:
     def __init__(self, model, config):
         self.model = model
         self.config = config
+        # Native-length -> millimetre factor; every emitted length is canonical.
+        self._lin = getattr(config, "linear_scale", 1.0)
         self.stat = None
         try:
             import linuxcnc
@@ -71,7 +74,9 @@ class LcncSource:
         vals["execution"] = _execution(s)
         vals["program"] = _basename(_get(s, "file")) or UNAVAILABLE
         vals["line"] = _get(s, "current_line", 0)
-        vals["pathfeed"] = _get(s, "current_vel", 0.0)
+        vals["pathfeed"] = round(_get(s, "current_vel", 0.0) * self._lin, 6)
+        vals["coolant_flood"] = "ON" if _get(s, "flood", 0) else "OFF"
+        vals["coolant_mist"] = "ON" if _get(s, "mist", 0) else "OFF"
         vals["feedovr"] = round(_get(s, "feedrate", 1.0) * 100.0, 1)
         vals["toolnum"] = _get(s, "tool_in_spindle", 0)
         tool_no = _get(s, "tool_in_spindle", 0)
@@ -86,10 +91,11 @@ class LcncSource:
         for axis in self.model.axes:
             idx = axis_index(axis.letter)
             aid = axis.letter.lower()
+            scale = self._lin if axis.kind == "LINEAR" else 1.0  # angles stay deg
             if idx < len(actual):
-                vals["pos_%s" % aid] = round(actual[idx], 6)
+                vals["pos_%s" % aid] = round(actual[idx] * scale, 6)
             if idx < len(commanded):
-                vals["poscmd_%s" % aid] = round(commanded[idx], 6)
+                vals["poscmd_%s" % aid] = round(commanded[idx] * scale, 6)
 
         spindles = _get(s, "spindle") or ()
         if spindles:
@@ -110,9 +116,9 @@ class LcncSource:
         table = {}
         name = _G5X_NAMES.get(_get(s, "g5x_index", 1), "G54")
         g5x = _get(s, "g5x_offset") or ()
-        table[name] = _pose_cells(g5x, letters)
+        table[name] = _pose_cells(g5x, letters, self._lin)
         g92 = _get(s, "g92_offset") or ()
-        g92_cells = _pose_cells(g92, letters)
+        g92_cells = _pose_cells(g92, letters, self._lin)
         if any(v != 0.0 for v in g92_cells.values()):
             table["G92"] = g92_cells
         return table
@@ -120,7 +126,7 @@ class LcncSource:
     def _tool_offset(self, s):
         """Applied tool length offset (G43) as {tool_key: {axis: value}}."""
         letters = [a.letter for a in self.model.axes]
-        cells = _pose_cells(_get(s, "tool_offset") or (), letters)
+        cells = _pose_cells(_get(s, "tool_offset") or (), letters, self._lin)
         tool = _get(s, "tool_in_spindle", 0)
         key = "T%d" % tool if tool and tool > 0 else "G43"
         return {key: cells}
@@ -142,16 +148,16 @@ class LcncSource:
                 tool_no=tool_no,
                 pocket=getattr(entry, "pocketno", getattr(entry, "id", 0)),
                 in_spindle=(tool_no == in_spindle),
-                diameter=getattr(entry, "diameter", 0.0),
-                length_z=getattr(entry, "zoffset", 0.0),
-                length_x=getattr(entry, "xoffset", 0.0),
+                diameter=getattr(entry, "diameter", 0.0) * self._lin,
+                length_z=getattr(entry, "zoffset", 0.0) * self._lin,
+                length_x=getattr(entry, "xoffset", 0.0) * self._lin,
                 orientation=getattr(entry, "orientation", 0),
                 comment=self._tool_comment(tool_no),
             ))
         return assets
 
     def _tool_comment(self, tool_no):
-        """Fetch a tool's comment string.
+        """Fetch a tool's comment string (trailing whitespace trimmed).
 
         stat.tool_table entries don't carry the comment (the struct-sequence
         binding omits it); stat.toolinfo(toolno) returns a dict that does.
@@ -161,7 +167,7 @@ class LcncSource:
         if info is None or tool_no <= 0:
             return ""
         try:
-            return (info(tool_no) or {}).get("comment", "") or ""
+            return ((info(tool_no) or {}).get("comment", "") or "").strip()
         except Exception:
             return ""
 
@@ -190,13 +196,18 @@ _G5X_NAMES = {1: "G54", 2: "G55", 3: "G56", 4: "G57", 5: "G58",
               6: "G59", 7: "G59.1", 8: "G59.2", 9: "G59.3"}
 
 
-def _pose_cells(pose, letters):
-    """Map an EmcPose 9-tuple to {axis_letter: value} for configured axes."""
+def _pose_cells(pose, letters, lin_scale=1.0):
+    """Map an EmcPose 9-tuple to {axis_letter: value} for configured axes.
+
+    Linear components (X Y Z U V W) are converted to millimetres; angular
+    components (A B C) are left in degrees.
+    """
     cells = {}
     for letter in letters:
         idx = axis_index(letter)
         if idx < len(pose):
-            cells[letter] = round(pose[idx], 6)
+            scale = lin_scale if letter in LINEAR_LETTERS else 1.0
+            cells[letter] = round(pose[idx] * scale, 6)
     return cells
 
 

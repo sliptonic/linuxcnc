@@ -10,7 +10,6 @@
 #
 #   [MTCONNECT]
 #   MODEL_DIR   = models          ; base dir for relative paths (default: INI dir)
-#   MODEL_UNITS = MILLIMETER
 #   MODEL_BASE  = frame.glb        ; static machine frame / column
 #   MODEL_X     = x_saddle.glb     ; link that moves with X
 #   MODEL_Y     = y_table.glb
@@ -18,11 +17,16 @@
 #   MODEL_SPINDLE = spindle.glb
 #   MODEL_CHAIN = X Y Z            ; nesting order (default: COORDINATES order)
 #
+# Geometry is served in the MTConnect canonical length unit (millimetre): the
+# MTConnect SolidModel element carries no per-mesh unit, and all streamed
+# positions are millimetres, so user-supplied meshes must be authored in mm.
+#
 # Alternatively, MODEL_AUTO = 1 generates simple placeholder box meshes for the
 # base and each axis directly from the travel limits, so any machine gets a
-# functional twin with no mesh files at all.  Auto meshes are generated in the
-# machine's own units and served from memory.  Files and MODEL_AUTO can be
-# mixed: an explicit MODEL_<axis> overrides the generated box for that link.
+# functional twin with no mesh files at all.  Auto meshes are generated in mm
+# (travel limits are scaled from the machine's native unit) and served from
+# memory.  Files and MODEL_AUTO can be mixed: an explicit MODEL_<axis> overrides
+# the generated box for that link.
 
 import os
 from dataclasses import dataclass, field
@@ -76,10 +80,13 @@ def build_models(ini, model, config=None):
     """Build MachineModels from the [MTCONNECT] section and kinematic model."""
     model_dir = ini.find("MTCONNECT", "MODEL_DIR") or os.path.dirname(
         os.path.abspath(ini.path))
-    units_explicit = ini.find("MTCONNECT", "MODEL_UNITS")
-    default_units = config.linear_units if config else "MILLIMETER"
-    mm = MachineModels(units=(units_explicit.strip().upper()
-                              if units_explicit else default_units))
+    # Geometry is served in the MTConnect canonical length unit (millimetre);
+    # the MTConnect SolidModel element carries no per-mesh unit, so served
+    # meshes must already be in millimetres.  Auto-generated boxes (below) are
+    # derived from the travel limits, which are in the machine's native unit, so
+    # they are scaled to millimetres by lin_scale.
+    lin_scale = getattr(config, "linear_scale", 1.0) if config else 1.0
+    mm = MachineModels(units="MILLIMETER")
     auto = _truthy(ini.find("MTCONNECT", "MODEL_AUTO", "0"))
     env = _envelope(model)
 
@@ -101,7 +108,7 @@ def build_models(ini, model, config=None):
         ref = MeshRef(name=name, path=None, media="STL",
                       content_type="model/stl", exists=True)
         mm.served[name] = ref
-        mm.generated[name] = _box_stl(box)
+        mm.generated[name] = _box_stl(_scale_box(box, lin_scale))
         return ref
 
     mm.base = register("MODEL_BASE") or register("MODEL_DEVICE")
@@ -229,6 +236,11 @@ def _axis_box(axis, env):
     if L == "Y":                                    # saddle plate
         return (xm, ym, zlo + t * 0.5, sx * 0.85, sy * 0.7, t)
     return (xm, ym, zlo + t, sx * 0.6, sy * 0.6, t)  # U/V/W
+
+
+def _scale_box(box, scale):
+    """Scale a (cx,cy,cz,dx,dy,dz) box from native units to millimetres."""
+    return tuple(c * scale for c in box)
 
 
 def _box_stl(box, name="link"):

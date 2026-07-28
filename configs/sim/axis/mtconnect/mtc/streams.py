@@ -178,6 +178,7 @@ def assets_xml(tool_assets, config, timestamp):
         "sender": "linuxcnc-mtconnect",
         "instanceId": config.instance_id,
         "version": SCHEMA_VERSION,
+        "deviceModelChangeTime": timestamp,
         "assetBufferSize": "1024",
         "assetCount": str(len(tool_assets)),
     })
@@ -188,14 +189,17 @@ def assets_xml(tool_assets, config, timestamp):
 
 
 def _cutting_tool(parent, tool, config, timestamp):
+    # serialNumber is required; LinuxCNC has no real serial, so echo the stable
+    # assetId.  All measurements are emitted in millimetres (MTConnect canonical).
     ct = ET.SubElement(parent, _as("CuttingTool"), {
         "assetId": tool.asset_id,
+        "serialNumber": tool.asset_id,
         "toolId": str(tool.tool_no),
         "deviceUuid": config.uuid,
         "timestamp": timestamp,
     })
-    if tool.comment:
-        ET.SubElement(ct, _as("Description")).text = tool.comment
+    if tool.comment and tool.comment.strip():
+        ET.SubElement(ct, _as("Description")).text = tool.comment.strip()
     lifecycle = ET.SubElement(ct, _as("CuttingToolLifeCycle"))
     status = ET.SubElement(lifecycle, _as("CutterStatus"))
     ET.SubElement(status, _as("Status")).text = "USED" if tool.in_spindle else "AVAILABLE"
@@ -207,15 +211,23 @@ def _cutting_tool(parent, tool, config, timestamp):
         "negativeOverlap": "0",
     }).text = str(tool.pocket)
 
-    measurements = ET.SubElement(lifecycle, _as("Measurements"))
+    # Tool-assembly measurements: the gauge-line-to-tip length is FunctionalLength
+    # (LF), not BodyLengthMax (LBX).  Emitted only when non-zero.
+    if tool.length_z:
+        measurements = ET.SubElement(lifecycle, _as("Measurements"))
+        ET.SubElement(measurements, _as("FunctionalLength"), {
+            "units": "MILLIMETER", "code": "LF",
+        }).text = "%g" % tool.length_z
+
+    # CuttingDiameter is a cutting-item measurement, so it lives under a
+    # CuttingItem, not the tool-level Measurements block.
     if tool.diameter:
-        ET.SubElement(measurements, _as("CuttingDiameter"), {
+        items = ET.SubElement(lifecycle, _as("CuttingItems"), {"count": "1"})
+        item = ET.SubElement(items, _as("CuttingItem"), {"indices": "1"})
+        m = ET.SubElement(item, _as("Measurements"))
+        ET.SubElement(m, _as("CuttingDiameter"), {
             "units": "MILLIMETER", "code": "DC",
         }).text = "%g" % tool.diameter
-    if tool.length_z:
-        ET.SubElement(measurements, _as("BodyLengthMax"), {
-            "units": "MILLIMETER", "code": "LBX",
-        }).text = "%g" % tool.length_z
 
 
 def _serialize(root):

@@ -1,0 +1,20 @@
+loobric1 — Loobric demo machine
+===============================
+
+A small simulated 3-axis metric mill used to demo the Loobric LinuxCNC
+client (loobric-linuxcnc). It is the stock AXIS sim plus the GladeVCP
+example panel and a small local tool table (loobric1.tbl, 5 tools,
+T1 is a touch probe).
+
+This config represents a machine that has NEVER communicated with a
+Loobric server: no keys, no bindings, no client configuration. The
+loobric-linuxcnc client is installed and configured separately, by hand,
+as part of the demo.
+
+Run it:
+
+    linuxcnc configs/sim/axis/loobric1/loobric1.ini
+
+The panel files (manual-example.ui, manual-example.hal, hitcounter.py)
+are symlinks to the shared copies in configs/sim/, same as the
+configs/sim/axis/gladevcp/ example.
